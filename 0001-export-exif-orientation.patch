@@ -3433,3 +3433,28 @@ index 6b15dbe..62a4bfb 100644
 -- 
 2.10.1 (Apple Git-78)
 
+From d3e1df0c6c1b33a0f0d6b86db776ba7ed75612f9 Mon Sep 17 00:00:00 2001
+From: Brian Armstrong <brian.armstrong@discordapp.com>
+Date: Mon, 19 Sep 2022 18:50:26 -0700
+Subject: [PATCH] reject webp with animation
+
+
+diff --git a/modules/imgcodecs/src/grfmt_webp.cpp b/modules/imgcodecs/src/grfmt_webp.cpp
+index 751b5f6e7e..10081c8bd2 100644
+--- a/modules/imgcodecs/src/grfmt_webp.cpp
++++ b/modules/imgcodecs/src/grfmt_webp.cpp
+@@ -139,6 +139,11 @@ bool WebPDecoder::readHeader()
+     WebPBitstreamFeatures features;
+     if(VP8_STATUS_OK == WebPGetFeatures(data.ptr(), WEBP_HEADER_SIZE, &features))
+     {
++        if (features.has_animation)
++        {
++            return false;
++        }
++
+         m_width  = features.width;
+         m_height = features.height;
+ 
+-- 
+2.17.1
+
