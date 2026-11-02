@@ -1,0 +1,34 @@
+From f925f72c3fdab489971b22b814a21209589eef1e Mon Sep 17 00:00:00 2001
+From: Michael Niedermayer <michael@niedermayer.cc>
+Date: Sun, 4 Oct 2026 23:44:39 +0200
+Subject: [PATCH 2/5] avformat/mov: accept ipma associations with
+ property_index 0
+
+ISO/IEC 23008-12 defines a property_index of 0 as no property being
+associated, but mov_read_iprp() rejected it, and with it the whole file.
+
+Found during triage of the security report srZp1wXh4CXQ
+
+Signed-off-by: Michael Niedermayer <michael@niedermayer.cc>
+---
+ libavformat/mov.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/libavformat/mov.c b/libavformat/mov.c
+index bb9ff99..33b0019 100644
+--- a/libavformat/mov.c
++++ b/libavformat/mov.c
+@@ -8501,7 +8501,9 @@ static int mov_read_iprp(MOVContext *c, AVIOContext *pb, MOVAtom atom)
+                 index <<= 8;
+                 index |= avio_r8(pb);
+             }
+-            if (index > nb_atoms || index <= 0) {
++            if (!index)
++                continue;
++            if (index > nb_atoms) {
+                 ret = AVERROR_INVALIDDATA;
+                 goto fail;
+             }
+-- 
+2.43.0
+
