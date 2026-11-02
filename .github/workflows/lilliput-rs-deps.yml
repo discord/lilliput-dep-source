@@ -1,0 +1,108 @@
+name: lilliput-rs deps
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to attach the assets to
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lilliput-rs-deps-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            args: --arch=amd64
+            asset: linux-amd64.tar.gz
+            cross: false
+          - os: ubuntu-22.04
+            args: --arch=aarch64
+            asset: linux-aarch64.tar.gz
+            cross: true
+          - os: macos-15
+            args: --osx
+            asset: osx.tar.gz
+            cross: false
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux' && matrix.cross == false
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm python3 cmake ninja-build meson pkg-config
+
+      - name: Install Linux aarch64 cross tools
+        if: runner.os == 'Linux' && matrix.cross == true
+        run: |
+          sudo sed -i -E 's|^deb ([^ ]+) (.*)$|deb [arch=amd64] \1 \2\ndeb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ \2|' /etc/apt/sources.list
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y \
+            nasm python3 cmake ninja-build meson pkg-config \
+            crossbuild-essential-arm64 \
+            g++-aarch64-linux-gnu \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
+
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake meson ninja nasm
+
+      - name: Build
+        run: |
+          ./scripts/build-lilliput-rs-deps.sh ${{ matrix.args }} --prefix="$RUNNER_TEMP/prefix"
+
+      - name: Create archive
+        run: |
+          tar -C "$RUNNER_TEMP/prefix" -czf "$RUNNER_TEMP/${{ matrix.asset }}" .
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ runner.temp }}/${{ matrix.asset }}
+
+      - name: Attach archive to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.release.tag_name || inputs.tag }}"
+          gh release upload "$tag" "$RUNNER_TEMP/${{ matrix.asset }}" --repo "${{ github.repository }}"
+
+  checksums:
+    name: sha256sums
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Write checksums and attach them
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p assets
+          find dist -name '*.tar.gz' -exec cp {} assets/ \;
+          cd assets
+          sha256sum $(ls *.tar.gz | sort) > sha256sums.txt
+          tag="${{ github.event.release.tag_name || inputs.tag }}"
+          gh release upload "$tag" sha256sums.txt --repo "${{ github.repository }}"
