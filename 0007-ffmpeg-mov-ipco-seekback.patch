@@ -1,0 +1,37 @@
+From 58edb0da3919d0e02e6e8ce15f71985a8a05cd87 Mon Sep 17 00:00:00 2001
+From: Michael Niedermayer <michael@niedermayer.cc>
+Date: Sun, 4 Oct 2026 23:43:40 +0200
+Subject: [PATCH 3/5] avformat/mov: do not seek back to cache ipco properties
+
+This could use ffio_ensure_seekback() but simply storing the 2 values
+is simpler
+
+no memory safety issue is known to depend on it.
+
+Found-by: OpenAI Security Research
+Reported in the security report srZp1wXh4CXQ
+
+Signed-off-by: Michael Niedermayer <michael@niedermayer.cc>
+---
+ libavformat/mov.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/libavformat/mov.c b/libavformat/mov.c
+index 33b0019..601e9ba 100644
+--- a/libavformat/mov.c
++++ b/libavformat/mov.c
+@@ -8459,8 +8459,9 @@ static int mov_read_iprp(MOVContext *c, AVIOContext *pb, MOVAtom atom)
+             goto fail;
+         }
+         av_log(c->fc, AV_LOG_TRACE, "ipco: index %d, box type %s\n", nb_atoms, av_fourcc2str(ref->type));
+-        avio_seek(pb, -8, SEEK_CUR);
+-        if (avio_read(pb, ref->data, ref->size) != ref->size) {
++        AV_WB32(ref->data, ref->size);
++        AV_WL32(ref->data + 4, ref->type);
++        if (avio_read(pb, ref->data + 8, ref->size - 8) != ref->size - 8) {
+             ret = AVERROR_INVALIDDATA;
+             goto fail;
+         }
+-- 
+2.43.0
+

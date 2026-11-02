@@ -1,0 +1,38 @@
+From 9bdfda0c4df992b72457ebdf441f48423cae4e59 Mon Sep 17 00:00:00 2001
+From: Michael Niedermayer <michael@niedermayer.cc>
+Date: Fri, 2 Oct 2026 17:53:35 +0200
+Subject: [PATCH 1/5] avformat/mov: keep frag_index.current on its fragment in
+ update_frag_index()
+
+The assertion failure was found during triage of the security report
+srZp1wXh4CXQ.
+
+Fixes: out of array access
+Fixes: Assertion index_entry_pos <= sti->nb_index_entries failed
+Fixes: crash.mp4 / make-crash.py
+Fixes: variant-assert.mp4 / make-variant-assert.py
+Fixes: srZp1wXh4CXQ
+Found-by: OpenAI Security Research
+Replicated through UnModified FFmpeg
+
+Signed-off-by: Michael Niedermayer <michael@niedermayer.cc>
+---
+ libavformat/mov.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/libavformat/mov.c b/libavformat/mov.c
+index d54b274..bb9ff99 100644
+--- a/libavformat/mov.c
++++ b/libavformat/mov.c
+@@ -1645,6 +1645,8 @@ static int update_frag_index(MOVContext *c, int64_t offset)
+     if (index < c->frag_index.nb_items)
+         memmove(c->frag_index.item + index + 1, c->frag_index.item + index,
+                 (c->frag_index.nb_items - index) * sizeof(*c->frag_index.item));
++    if (index <= c->frag_index.current)
++        c->frag_index.current++;
+ 
+     item = &c->frag_index.item[index];
+     item->headers_read = 0;
+-- 
+2.43.0
+
