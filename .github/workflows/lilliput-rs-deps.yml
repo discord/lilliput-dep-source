@@ -1,21 +1,39 @@
 name: lilliput-rs deps
 
 on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "scripts/**"
+      - "**/*.tar"
+      - "**/*.tar.gz"
+      - "**/*.tar.xz"
+      - "**/*.patch"
+      - ".github/workflows/lilliput-rs-deps.yml"
+  push:
+    branches: [master]
+    paths:
+      - "scripts/**"
+      - "**/*.tar"
+      - "**/*.tar.gz"
+      - "**/*.tar.xz"
+      - "**/*.patch"
+      - ".github/workflows/lilliput-rs-deps.yml"
   release:
     types: [published]
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to attach the assets to
-        required: true
+        description: Release tag to attach assets to. Empty builds without publishing.
+        required: false
         type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: lilliput-rs-deps-${{ github.event.release.tag_name || inputs.tag }}
-  cancel-in-progress: false
+  group: lilliput-rs-deps-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -64,6 +82,7 @@ jobs:
           path: ${{ runner.temp }}/${{ matrix.asset }}
 
       - name: Attach archive to the release
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -80,13 +99,23 @@ jobs:
         with:
           path: dist
 
-      - name: Write checksums and attach them
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Write checksums
         run: |
           mkdir -p assets
           find dist -name '*.tar.gz' -exec cp {} assets/ \;
           cd assets
           sha256sum $(ls *.tar.gz | sort) > sha256sums.txt
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: sha256sums.txt
+          path: assets/sha256sums.txt
+
+      - name: Attach checksums to the release
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           tag="${{ github.event.release.tag_name || inputs.tag }}"
-          gh release upload "$tag" sha256sums.txt --repo "${{ github.repository }}"
+          gh release upload "$tag" assets/sha256sums.txt --repo "${{ github.repository }}"
