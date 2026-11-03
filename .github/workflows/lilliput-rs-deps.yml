@@ -28,37 +28,21 @@ jobs:
           - os: ubuntu-22.04
             args: --arch=amd64
             asset: linux-amd64.tar.gz
-            cross: false
-          - os: ubuntu-22.04
+          - os: ubuntu-22.04-arm
             args: --arch=aarch64
             asset: linux-aarch64.tar.gz
-            cross: true
           - os: macos-15
             args: --osx
             asset: osx.tar.gz
-            cross: false
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
 
       - name: Install Linux build tools
-        if: runner.os == 'Linux' && matrix.cross == false
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y nasm python3 cmake ninja-build meson pkg-config
-
-      - name: Install Linux aarch64 cross tools
-        if: runner.os == 'Linux' && matrix.cross == true
-        run: |
-          sudo sed -i -E 's|^deb ([^ ]+) (.*)$|deb [arch=amd64] \1 \2\ndeb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ \2|' /etc/apt/sources.list
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo apt-get install -y \
-            nasm python3 cmake ninja-build meson pkg-config \
-            crossbuild-essential-arm64 \
-            g++-aarch64-linux-gnu \
-            gcc-aarch64-linux-gnu \
-            binutils-aarch64-linux-gnu
 
       - name: Install macOS build tools
         if: runner.os == 'macOS'

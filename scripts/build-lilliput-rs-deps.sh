@@ -60,6 +60,7 @@ FFMPEG_EXTRA=""
 CONFIGURE_HOST=""
 OSX_CMAKE=""
 ARCH=""
+CROSS=0
 
 if [ "$OSX" -eq 1 ]; then
   PLATFORM="osx"
@@ -92,17 +93,24 @@ elif [ -n "$ARCH_ARG" ]; then
     aarch64)
       ARCH="aarch64"
       PLATFORM="linux-aarch64"
-      CC="aarch64-linux-gnu-gcc"
-      CXX="aarch64-linux-gnu-g++"
-      AR="aarch64-linux-gnu-ar"
-      RANLIB="aarch64-linux-gnu-ranlib"
-      STRIP="aarch64-linux-gnu-strip"
       ARCH_CFLAGS="-fPIC -O3 -march=armv8.2-a+crc"
       ARCH_CXXFLAGS="$ARCH_CFLAGS"
-      CONFIGURE_HOST="aarch64-linux-gnu"
-      CMAKE_EXTRA="-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX -DCMAKE_AR=/usr/bin/$AR -DCMAKE_RANLIB=/usr/bin/$RANLIB"
-      AOM_EXTRA="$CMAKE_EXTRA -DAOM_TARGET_CPU=arm64"
-      FFMPEG_EXTRA="--arch=aarch64 --target-os=linux --cross-prefix=aarch64-linux-gnu- --enable-cross-compile"
+      AOM_EXTRA="-DAOM_TARGET_CPU=arm64"
+      FFMPEG_EXTRA="--arch=aarch64"
+      # GitHub-hosted ubuntu-*-arm runners compile natively. Cross only when
+      # this flag is used on an x86_64 machine.
+      if [ "$(uname -m)" != "aarch64" ]; then
+        CROSS=1
+        CC="aarch64-linux-gnu-gcc"
+        CXX="aarch64-linux-gnu-g++"
+        AR="aarch64-linux-gnu-ar"
+        RANLIB="aarch64-linux-gnu-ranlib"
+        STRIP="aarch64-linux-gnu-strip"
+        CONFIGURE_HOST="aarch64-linux-gnu"
+        CMAKE_EXTRA="-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX -DCMAKE_AR=/usr/bin/$AR -DCMAKE_RANLIB=/usr/bin/$RANLIB"
+        AOM_EXTRA="$CMAKE_EXTRA $AOM_EXTRA"
+        FFMPEG_EXTRA="--arch=aarch64 --target-os=linux --cross-prefix=aarch64-linux-gnu- --enable-cross-compile"
+      fi
       ;;
     *)
       echo "Unsupported architecture: $ARCH_ARG" >&2
@@ -133,7 +141,7 @@ require ninja
 if [ "$ARCH" = "amd64" ] || [ "$ARCH" = "x86_64" ]; then
   require nasm
 fi
-if [ "$ARCH" = "aarch64" ]; then
+if [ "$CROSS" -eq 1 ]; then
   require aarch64-linux-gnu-gcc
 fi
 
@@ -248,7 +256,7 @@ echo "--------------------"
 check_sha1 dav1d-1.5.1.tar.gz
 extract_strip dav1d-1.5.1.tar.gz "$SRC/dav1d"
 mkdir -p "$WORKDIR/dav1d"
-if [ "$OSX" -eq 1 ]; then
+if [ "$OSX" -eq 1 ] || [ "$CROSS" -eq 0 -a "$ARCH" != "amd64" ]; then
   meson setup "$SRC/dav1d" "$WORKDIR/dav1d" \
     --prefix="$INSTALL" \
     --default-library=static \
