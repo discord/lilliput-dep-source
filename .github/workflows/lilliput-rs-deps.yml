@@ -1,0 +1,121 @@
+name: lilliput-rs deps
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "scripts/**"
+      - "**/*.tar"
+      - "**/*.tar.gz"
+      - "**/*.tar.xz"
+      - "**/*.patch"
+      - ".github/workflows/lilliput-rs-deps.yml"
+  push:
+    branches: [master]
+    paths:
+      - "scripts/**"
+      - "**/*.tar"
+      - "**/*.tar.gz"
+      - "**/*.tar.xz"
+      - "**/*.patch"
+      - ".github/workflows/lilliput-rs-deps.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach assets to. Empty builds without publishing.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lilliput-rs-deps-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            args: --arch=amd64
+            asset: linux-amd64.tar.gz
+          - os: ubuntu-22.04-arm
+            args: --arch=aarch64
+            asset: linux-aarch64.tar.gz
+          - os: macos-15
+            args: --osx
+            asset: osx.tar.gz
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm python3 cmake ninja-build meson pkg-config
+
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake meson ninja nasm
+
+      - name: Build
+        run: |
+          ./scripts/build-lilliput-rs-deps.sh ${{ matrix.args }} --prefix="$RUNNER_TEMP/prefix"
+
+      - name: Create archive
+        run: |
+          tar -C "$RUNNER_TEMP/prefix" -czf "$RUNNER_TEMP/${{ matrix.asset }}" .
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ runner.temp }}/${{ matrix.asset }}
+
+      - name: Attach archive to the release
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.release.tag_name || inputs.tag }}"
+          gh release upload "$tag" "$RUNNER_TEMP/${{ matrix.asset }}" --repo "${{ github.repository }}"
+
+  checksums:
+    name: sha256sums
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Write checksums
+        run: |
+          mkdir -p assets
+          find dist -name '*.tar.gz' -exec cp {} assets/ \;
+          cd assets
+          sha256sum $(ls *.tar.gz | sort) > sha256sums.txt
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: sha256sums.txt
+          path: assets/sha256sums.txt
+
+      - name: Attach checksums to the release
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.release.tag_name || inputs.tag }}"
+          gh release upload "$tag" assets/sha256sums.txt --repo "${{ github.repository }}"
