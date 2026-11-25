@@ -445,28 +445,64 @@ echo "libsharpyuv (libwebp 1.6.0)"
 echo "--------------------"
 # libavif needs libsharpyuv for AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV. Without
 # it, avifImageRGBToYUVLibSharpYUV is a stub that returns NOT_IMPLEMENTED.
-# Only the sharpyuv target is used. It is folded into libavif.a below with its
-# symbols made local, so it cannot clash with the libwebp that the
-# libwebp-sys2 crate compiles into the same binary.
+# The libwebp that the libwebp-sys2 crate compiles into the same binary has
+# its own SharpYuv* symbols, so this copy is renamed to avif_SharpYuv* at
+# compile time: a first build lists the symbols libsharpyuv defines, a header
+# #defines each one to an avif_ name, and the real build (and libavif below)
+# force-includes that header. A compile-time rename behaves the same with GNU
+# ld, lld and ld64; hiding symbols with a partial link does not (ld64 -r makes
+# libavif's hidden-visibility API local and cannot hide common symbols).
+NM=${NM:-nm}
+if [ "$CROSS" -eq 1 ]; then
+  NM=aarch64-linux-gnu-nm
+fi
+# Prints the external symbols an archive defines, without the Mach-O
+# underscore, one per line.
+defined_symbols() {
+  if [ "$OSX" -eq 1 ]; then
+    "$NM" -g -U "$1" | awk 'NF == 3 {print $3}' | sed 's/^_//' | sort -u
+  else
+    "$NM" -g --defined-only "$1" | awk 'NF == 3 {print $3}' | sort -u
+  fi
+}
 check_sha1 libwebp-1.6.0.tar.gz
 extract_strip libwebp-1.6.0.tar.gz "$SRC/libwebp"
-cmake -S "$SRC/libwebp" -B "$WORKDIR/libwebp" $CMAKE_EXTRA $OSX_CMAKE \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_SHARED_LIBS=OFF \
-  -DWEBP_BUILD_ANIM_UTILS=OFF \
-  -DWEBP_BUILD_CWEBP=OFF \
-  -DWEBP_BUILD_DWEBP=OFF \
-  -DWEBP_BUILD_GIF2WEBP=OFF \
-  -DWEBP_BUILD_IMG2WEBP=OFF \
-  -DWEBP_BUILD_VWEBP=OFF \
-  -DWEBP_BUILD_WEBPINFO=OFF \
-  -DWEBP_BUILD_LIBWEBPMUX=OFF \
-  -DWEBP_BUILD_WEBPMUX=OFF \
-  -DWEBP_BUILD_EXTRAS=OFF \
-  -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-  -DCMAKE_C_FLAGS="$ARCH_CFLAGS" \
-  -DCMAKE_CXX_FLAGS="$ARCH_CXXFLAGS"
-cmake --build "$WORKDIR/libwebp" --target sharpyuv
+# -fno-common: tentative definitions (libsharpyuv's dispatch pointers) become
+# real definitions, so they are listed and renamed like everything else.
+build_sharpyuv() {
+  cmake -S "$SRC/libwebp" -B "$1" $CMAKE_EXTRA $OSX_CMAKE \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DWEBP_BUILD_ANIM_UTILS=OFF \
+    -DWEBP_BUILD_CWEBP=OFF \
+    -DWEBP_BUILD_DWEBP=OFF \
+    -DWEBP_BUILD_GIF2WEBP=OFF \
+    -DWEBP_BUILD_IMG2WEBP=OFF \
+    -DWEBP_BUILD_VWEBP=OFF \
+    -DWEBP_BUILD_WEBPINFO=OFF \
+    -DWEBP_BUILD_LIBWEBPMUX=OFF \
+    -DWEBP_BUILD_WEBPMUX=OFF \
+    -DWEBP_BUILD_EXTRAS=OFF \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_C_FLAGS="$2" \
+    -DCMAKE_CXX_FLAGS="$ARCH_CXXFLAGS"
+  cmake --build "$1" --target sharpyuv
+}
+SHARPYUV_SYMS="$WORKDIR/sharpyuv.syms"
+SHARPYUV_RENAME="$WORKDIR/sharpyuv_rename.h"
+build_sharpyuv "$WORKDIR/libwebp-symbols" "$ARCH_CFLAGS -fno-common"
+defined_symbols "$WORKDIR/libwebp-symbols/libsharpyuv.a" > "$SHARPYUV_SYMS"
+if ! grep -qx 'SharpYuvConvert' "$SHARPYUV_SYMS"; then
+  echo "Error: SharpYuvConvert not in the libsharpyuv symbol list" >&2
+  exit 1
+fi
+if grep -vqE '^[A-Za-z_][A-Za-z0-9_]*$' "$SHARPYUV_SYMS"; then
+  echo "Error: unexpected libsharpyuv symbol name:" >&2
+  grep -vE '^[A-Za-z_][A-Za-z0-9_]*$' "$SHARPYUV_SYMS" >&2
+  exit 1
+fi
+awk '{print "#define " $1 " avif_" $1}' "$SHARPYUV_SYMS" > "$SHARPYUV_RENAME"
+build_sharpyuv "$WORKDIR/libwebp" "$ARCH_CFLAGS -fno-common -include $SHARPYUV_RENAME"
 SHARPYUV_LIB="$WORKDIR/libwebp/libsharpyuv.a"
 verify_arch "$SHARPYUV_LIB"
 # libavif includes <sharpyuv/sharpyuv.h>; the libwebp source root has that path.
@@ -499,55 +535,47 @@ cmake -S "$SRC/libavif" -B "$WORKDIR/libavif" $CMAKE_EXTRA $OSX_CMAKE \
   -DCMAKE_PREFIX_PATH="$INSTALL" \
   -DBUILD_SHARED_LIBS=OFF \
   -DCMAKE_INSTALL_PREFIX="$INSTALL" \
-  -DCMAKE_C_FLAGS="$ARCH_CFLAGS" \
+  -DCMAKE_C_FLAGS="$ARCH_CFLAGS -include $SHARPYUV_RENAME" \
   -DCMAKE_CXX_FLAGS="$ARCH_CXXFLAGS"
 cmake --build "$WORKDIR/libavif"
 cmake --install "$WORKDIR/libavif"
 verify_arch "$INSTALL/lib/libavif.a"
 
 echo "--------------------"
-echo "folding libsharpyuv into libavif.a"
+echo "merging libsharpyuv into libavif.a"
 echo "--------------------"
-# Partial-link libavif and libsharpyuv into one object, then hide every symbol
-# libsharpyuv defines. libavif's calls bind to this copy; nothing outside sees
-# a SharpYuv* symbol.
-FOLD="$WORKDIR/fold"
-rm -rf "$FOLD"
-mkdir -p "$FOLD"
-NM=${NM:-nm}
-if [ "$CROSS" -eq 1 ]; then
-  NM=aarch64-linux-gnu-nm
-fi
+MERGE="$WORKDIR/sharpyuv-merge"
+rm -rf "$MERGE"
+mkdir -p "$MERGE"
 if [ "$OSX" -eq 1 ]; then
-  "$NM" -g -U "$SHARPYUV_LIB" | awk 'NF == 3 {print $3}' | sort -u > "$FOLD/sharpyuv.syms"
-  ld -r -arch "$ARCH" -o "$FOLD/avif.o" \
-    -all_load "$INSTALL/lib/libavif.a" "$SHARPYUV_LIB" \
-    -unexported_symbols_list "$FOLD/sharpyuv.syms"
-  rm -f "$INSTALL/lib/libavif.a"
-  libtool -static -o "$INSTALL/lib/libavif.a" "$FOLD/avif.o"
+  libtool -static -o "$MERGE/libavif.a" "$INSTALL/lib/libavif.a" "$SHARPYUV_LIB"
 else
-  LD=${LD:-ld}
-  OBJCOPY=${OBJCOPY:-objcopy}
-  if [ "$CROSS" -eq 1 ]; then
-    LD=aarch64-linux-gnu-ld
-    OBJCOPY=aarch64-linux-gnu-objcopy
+  (cd "$MERGE" && "$AR" x "$SHARPYUV_LIB")
+  CLASH=$("$AR" t "$INSTALL/lib/libavif.a" | grep -Fx -f <("$AR" t "$SHARPYUV_LIB") || true)
+  if [ -n "$CLASH" ]; then
+    echo "Error: libavif.a and libsharpyuv.a share member names: $CLASH" >&2
+    exit 1
   fi
-  "$NM" -g --defined-only "$SHARPYUV_LIB" | awk 'NF == 3 {print $3}' | sort -u > "$FOLD/sharpyuv.syms"
-  "$LD" -r -o "$FOLD/avif_combined.o" \
-    --whole-archive "$INSTALL/lib/libavif.a" "$SHARPYUV_LIB" --no-whole-archive
-  "$OBJCOPY" --localize-symbols="$FOLD/sharpyuv.syms" "$FOLD/avif_combined.o" "$FOLD/avif.o"
-  rm -f "$INSTALL/lib/libavif.a"
-  "$AR" crs "$INSTALL/lib/libavif.a" "$FOLD/avif.o"
+  cp "$INSTALL/lib/libavif.a" "$MERGE/libavif.a"
+  "$AR" rs "$MERGE/libavif.a" $("$AR" t "$SHARPYUV_LIB" | sed "s|^|$MERGE/|")
 fi
-if [ ! -s "$FOLD/sharpyuv.syms" ]; then
-  echo "Error: no libsharpyuv symbols found to fold" >&2
+mv "$MERGE/libavif.a" "$INSTALL/lib/libavif.a"
+# Every libsharpyuv symbol in libavif.a must carry the avif_ prefix: none of
+# the original names may be defined or referenced, and the renamed entry point
+# must be defined.
+if [ "$OSX" -eq 1 ]; then
+  AVIF_SYMS=$("$NM" -g "$INSTALL/lib/libavif.a" | awk 'NF >= 2 {print $NF}' | sed 's/^_//' | sort -u)
+else
+  AVIF_SYMS=$("$NM" -g "$INSTALL/lib/libavif.a" | awk 'NF >= 2 {print $NF}' | sort -u)
+fi
+LEAKED=$(echo "$AVIF_SYMS" | grep -Fx -f "$SHARPYUV_SYMS" || true)
+if [ -n "$LEAKED" ]; then
+  echo "Error: libavif.a still has unprefixed libsharpyuv symbols:" >&2
+  echo "$LEAKED" >&2
   exit 1
 fi
-# The folded archive must export no SharpYuv symbol and leave none undefined.
-LEAKED=$("$NM" -g "$INSTALL/lib/libavif.a" 2>/dev/null | grep -i 'sharpyuv' | grep -v 'avifImageRGBToYUVLibSharpYUV' || true)
-if [ -n "$LEAKED" ]; then
-  echo "Error: libavif.a still exposes libsharpyuv symbols:" >&2
-  echo "$LEAKED" >&2
+if [ "$(defined_symbols "$INSTALL/lib/libavif.a" | grep -cx 'avif_SharpYuvConvert')" -ne 1 ]; then
+  echo "Error: libavif.a does not define avif_SharpYuvConvert" >&2
   exit 1
 fi
 verify_arch "$INSTALL/lib/libavif.a"
@@ -610,7 +638,7 @@ info = {
         ],
         "libyuv": "4ed75166cf1885b9690214b362f8675294505a37",
         "svt-av1": "4.3.0",
-        "libsharpyuv": "libwebp 1.6.0, folded into libavif.a",
+        "libsharpyuv": "libwebp 1.6.0, merged into libavif.a as avif_SharpYuv*",
         "libavif": "1.4.2",
     },
     "archives": archives,
