@@ -412,7 +412,7 @@ cp -R "$SRC/libyuv/include/." "$INSTALL/include/"
 verify_arch "$INSTALL/lib/libyuv.a"
 
 echo "--------------------"
-echo "SVT-AV1 4.3.0 (encoder only)"
+echo "SVT-AV1 4.3.1 (encoder only)"
 echo "--------------------"
 # libavif's AVIF_CODEC_SVT=SYSTEM links this. x86 needs nasm for the SIMD
 # kernels; ARM uses intrinsics and .S files, so no nasm there.
@@ -421,8 +421,8 @@ echo "--------------------"
 # SVT_AV1_LTO=OFF: SVT turns on -flto for Release builds by default, which fills
 # the archive with GCC LTO bytecode that rust-lld cannot read (every svt_av1_*
 # symbol comes up undefined when lilliput-rs links).
-check_sha1 SVT-AV1-4.3.0.tar.gz
-extract_strip SVT-AV1-4.3.0.tar.gz "$SRC/svt-av1"
+check_sha1 SVT-AV1-4.3.1.tar.gz
+extract_strip SVT-AV1-4.3.1.tar.gz "$SRC/svt-av1"
 cmake -S "$SRC/svt-av1" -B "$WORKDIR/svt-av1" $CMAKE_EXTRA $OSX_CMAKE \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_SHARED_LIBS=OFF \
@@ -637,7 +637,7 @@ info = {
             "0009-ffmpeg-mov-zero-ctts-gap.patch",
         ],
         "libyuv": "4ed75166cf1885b9690214b362f8675294505a37",
-        "svt-av1": "4.3.0",
+        "svt-av1": "4.3.1",
         "libsharpyuv": "libwebp 1.6.0, merged into libavif.a as avif_SharpYuv*",
         "libavif": "1.4.2",
     },
