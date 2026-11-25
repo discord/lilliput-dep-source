@@ -267,10 +267,10 @@ extract_strip bzip2-1.0.8.tar.gz "$SRC/bzip2"
 verify_arch "$INSTALL/lib/libbz2.a"
 
 echo "--------------------"
-echo "dav1d 1.5.1"
+echo "dav1d 1.5.5"
 echo "--------------------"
-check_sha1 dav1d-1.5.1.tar.gz
-extract_strip dav1d-1.5.1.tar.gz "$SRC/dav1d"
+check_sha1 dav1d-1.5.5.tar.gz
+extract_strip dav1d-1.5.5.tar.gz "$SRC/dav1d"
 mkdir -p "$WORKDIR/dav1d"
 if [ "$OSX" -eq 1 ] || [ "$CROSS" -eq 0 -a "$ARCH" != "amd64" ]; then
   meson setup "$SRC/dav1d" "$WORKDIR/dav1d" \
@@ -625,7 +625,7 @@ info = {
         "libjpeg-turbo": "3.1.0",
         "zlib-ng": "2.3.3",
         "bzip2": "1.0.8",
-        "dav1d": "1.5.1",
+        "dav1d": "1.5.5",
         "libaom": "3.11.0",
         "ffmpeg": "7.0.2",
         "ffmpeg_patches": [
