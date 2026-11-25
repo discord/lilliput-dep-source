@@ -302,10 +302,10 @@ done
 verify_arch "$INSTALL/lib/libdav1d.a"
 
 echo "--------------------"
-echo "libaom 3.11.0"
+echo "libaom 3.15.3"
 echo "--------------------"
-check_sha1 libaom-3.11.0.tar.gz
-extract_into libaom-3.11.0.tar.gz "$SRC/aom"
+check_sha1 libaom-3.15.3.tar.gz
+extract_into libaom-3.15.3.tar.gz "$SRC/aom"
 cmake -S "$SRC/aom" -B "$WORKDIR/aom" $CMAKE_EXTRA $AOM_EXTRA $OSX_CMAKE \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_SHARED_LIBS=OFF \
@@ -626,7 +626,7 @@ info = {
         "zlib-ng": "2.3.3",
         "bzip2": "1.0.8",
         "dav1d": "1.5.5",
-        "libaom": "3.11.0",
+        "libaom": "3.15.3",
         "ffmpeg": "7.0.2",
         "ffmpeg_patches": [
             "0004-ffmpeg-mov-read-trun-ctts-shift.patch",
