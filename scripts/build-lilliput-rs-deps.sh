@@ -197,6 +197,22 @@ verify_arch() {
   esac
 }
 
+# Consumers link these archives with rust-lld or the platform linker, without
+# the compiler's LTO plugin, so every member must be real machine code.
+verify_no_lto() {
+  local file="$1" sections
+  if [ "$OSX" -eq 1 ]; then
+    return 0
+  fi
+  sections=$(readelf -S -W "$file" 2>/dev/null)
+  case "$sections" in
+    *.gnu.lto_*|*.llvm.lto*|*.llvmbc*)
+      echo "Error: $file contains LTO bytecode" >&2
+      exit 1
+      ;;
+  esac
+}
+
 export CC CXX AR RANLIB STRIP
 export PKG_CONFIG_PATH="$INSTALL/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
@@ -251,10 +267,10 @@ extract_strip bzip2-1.0.8.tar.gz "$SRC/bzip2"
 verify_arch "$INSTALL/lib/libbz2.a"
 
 echo "--------------------"
-echo "dav1d 1.5.1"
+echo "dav1d 1.5.5"
 echo "--------------------"
-check_sha1 dav1d-1.5.1.tar.gz
-extract_strip dav1d-1.5.1.tar.gz "$SRC/dav1d"
+check_sha1 dav1d-1.5.5.tar.gz
+extract_strip dav1d-1.5.5.tar.gz "$SRC/dav1d"
 mkdir -p "$WORKDIR/dav1d"
 if [ "$OSX" -eq 1 ] || [ "$CROSS" -eq 0 -a "$ARCH" != "amd64" ]; then
   meson setup "$SRC/dav1d" "$WORKDIR/dav1d" \
@@ -286,10 +302,10 @@ done
 verify_arch "$INSTALL/lib/libdav1d.a"
 
 echo "--------------------"
-echo "libaom 3.11.0"
+echo "libaom 3.15.3"
 echo "--------------------"
-check_sha1 libaom-3.11.0.tar.gz
-extract_into libaom-3.11.0.tar.gz "$SRC/aom"
+check_sha1 libaom-3.15.3.tar.gz
+extract_into libaom-3.15.3.tar.gz "$SRC/aom"
 cmake -S "$SRC/aom" -B "$WORKDIR/aom" $CMAKE_EXTRA $AOM_EXTRA $OSX_CMAKE \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_SHARED_LIBS=OFF \
@@ -396,15 +412,114 @@ cp -R "$SRC/libyuv/include/." "$INSTALL/include/"
 verify_arch "$INSTALL/lib/libyuv.a"
 
 echo "--------------------"
-echo "libavif 1.1.1"
+echo "SVT-AV1 4.3.1 (encoder only)"
 echo "--------------------"
-check_sha1 libavif-1.1.1.tar.gz
-extract_strip libavif-1.1.1.tar.gz "$SRC/libavif"
+# libavif's AVIF_CODEC_SVT=SYSTEM links this. x86 needs nasm for the SIMD
+# kernels; ARM uses intrinsics and .S files, so no nasm there.
+# LOG_QUIET: the library otherwise prints ~20 info lines to stderr per encode
+# (SVT_LOG defaults to info). Encode errors still come back through libavif.
+# SVT_AV1_LTO=OFF: SVT turns on -flto for Release builds by default, which fills
+# the archive with GCC LTO bytecode that rust-lld cannot read (every svt_av1_*
+# symbol comes up undefined when lilliput-rs links).
+check_sha1 SVT-AV1-4.3.1.tar.gz
+extract_strip SVT-AV1-4.3.1.tar.gz "$SRC/svt-av1"
+cmake -S "$SRC/svt-av1" -B "$WORKDIR/svt-av1" $CMAKE_EXTRA $OSX_CMAKE \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DBUILD_APPS=OFF \
+  -DBUILD_TESTING=OFF \
+  -DREPRODUCIBLE_BUILDS=ON \
+  -DLOG_QUIET=ON \
+  -DSVT_AV1_LTO=OFF \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+  -DCMAKE_INSTALL_PREFIX="$INSTALL" \
+  -DCMAKE_INSTALL_LIBDIR=lib \
+  -DCMAKE_C_FLAGS="$ARCH_CFLAGS" \
+  -DCMAKE_CXX_FLAGS="$ARCH_CXXFLAGS"
+cmake --build "$WORKDIR/svt-av1"
+cmake --install "$WORKDIR/svt-av1"
+verify_arch "$INSTALL/lib/libSvtAv1Enc.a"
+
+echo "--------------------"
+echo "libsharpyuv (libwebp 1.6.0)"
+echo "--------------------"
+# libavif needs libsharpyuv for AVIF_CHROMA_DOWNSAMPLING_SHARP_YUV. Without
+# it, avifImageRGBToYUVLibSharpYUV is a stub that returns NOT_IMPLEMENTED.
+# The libwebp that the libwebp-sys2 crate compiles into the same binary has
+# its own SharpYuv* symbols, so this copy is renamed to avif_SharpYuv* at
+# compile time: a first build lists the symbols libsharpyuv defines, a header
+# #defines each one to an avif_ name, and the real build (and libavif below)
+# force-includes that header. A compile-time rename behaves the same with GNU
+# ld, lld and ld64; hiding symbols with a partial link does not (ld64 -r makes
+# libavif's hidden-visibility API local and cannot hide common symbols).
+NM=${NM:-nm}
+if [ "$CROSS" -eq 1 ]; then
+  NM=aarch64-linux-gnu-nm
+fi
+# Prints the external symbols an archive defines, without the Mach-O
+# underscore, one per line.
+defined_symbols() {
+  if [ "$OSX" -eq 1 ]; then
+    "$NM" -g -U "$1" | awk 'NF == 3 {print $3}' | sed 's/^_//' | sort -u
+  else
+    "$NM" -g --defined-only "$1" | awk 'NF == 3 {print $3}' | sort -u
+  fi
+}
+check_sha1 libwebp-1.6.0.tar.gz
+extract_strip libwebp-1.6.0.tar.gz "$SRC/libwebp"
+# -fno-common: tentative definitions (libsharpyuv's dispatch pointers) become
+# real definitions, so they are listed and renamed like everything else.
+build_sharpyuv() {
+  cmake -S "$SRC/libwebp" -B "$1" $CMAKE_EXTRA $OSX_CMAKE \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DWEBP_BUILD_ANIM_UTILS=OFF \
+    -DWEBP_BUILD_CWEBP=OFF \
+    -DWEBP_BUILD_DWEBP=OFF \
+    -DWEBP_BUILD_GIF2WEBP=OFF \
+    -DWEBP_BUILD_IMG2WEBP=OFF \
+    -DWEBP_BUILD_VWEBP=OFF \
+    -DWEBP_BUILD_WEBPINFO=OFF \
+    -DWEBP_BUILD_LIBWEBPMUX=OFF \
+    -DWEBP_BUILD_WEBPMUX=OFF \
+    -DWEBP_BUILD_EXTRAS=OFF \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_C_FLAGS="$2" \
+    -DCMAKE_CXX_FLAGS="$ARCH_CXXFLAGS"
+  cmake --build "$1" --target sharpyuv
+}
+SHARPYUV_SYMS="$WORKDIR/sharpyuv.syms"
+SHARPYUV_RENAME="$WORKDIR/sharpyuv_rename.h"
+build_sharpyuv "$WORKDIR/libwebp-symbols" "$ARCH_CFLAGS -fno-common"
+defined_symbols "$WORKDIR/libwebp-symbols/libsharpyuv.a" > "$SHARPYUV_SYMS"
+if ! grep -qx 'SharpYuvConvert' "$SHARPYUV_SYMS"; then
+  echo "Error: SharpYuvConvert not in the libsharpyuv symbol list" >&2
+  exit 1
+fi
+if grep -vqE '^[A-Za-z_][A-Za-z0-9_]*$' "$SHARPYUV_SYMS"; then
+  echo "Error: unexpected libsharpyuv symbol name:" >&2
+  grep -vE '^[A-Za-z_][A-Za-z0-9_]*$' "$SHARPYUV_SYMS" >&2
+  exit 1
+fi
+awk '{print "#define " $1 " avif_" $1}' "$SHARPYUV_SYMS" > "$SHARPYUV_RENAME"
+build_sharpyuv "$WORKDIR/libwebp" "$ARCH_CFLAGS -fno-common -include $SHARPYUV_RENAME"
+SHARPYUV_LIB="$WORKDIR/libwebp/libsharpyuv.a"
+verify_arch "$SHARPYUV_LIB"
+# libavif includes <sharpyuv/sharpyuv.h>; the libwebp source root has that path.
+SHARPYUV_INCLUDE="$SRC/libwebp"
+
+echo "--------------------"
+echo "libavif 1.4.2"
+echo "--------------------"
+check_sha1 libavif-1.4.2.tar.gz
+extract_strip libavif-1.4.2.tar.gz "$SRC/libavif"
 cmake -S "$SRC/libavif" -B "$WORKDIR/libavif" $CMAKE_EXTRA $OSX_CMAKE \
   -DCMAKE_BUILD_TYPE=Release \
   -DAVIF_CODEC_AOM=SYSTEM \
   -DAVIF_CODEC_DAV1D=SYSTEM \
+  -DAVIF_CODEC_SVT=SYSTEM \
   -DAVIF_LIBYUV=SYSTEM \
+  -DAVIF_LIBSHARPYUV=SYSTEM \
   -DAVIF_BUILD_APPS=OFF \
   -DAVIF_BUILD_TESTS=OFF \
   -DLIBYUV_LIBRARY="$INSTALL/lib/libyuv.a" \
@@ -413,19 +528,62 @@ cmake -S "$SRC/libavif" -B "$WORKDIR/libavif" $CMAKE_EXTRA $OSX_CMAKE \
   -DAOM_INCLUDE_DIR="$INSTALL/include" \
   -DDAV1D_LIBRARY="$INSTALL/lib/libdav1d.a" \
   -DDAV1D_INCLUDE_DIR="$INSTALL/include" \
+  -DSVT_LIBRARY="$INSTALL/lib/libSvtAv1Enc.a" \
+  -DSVT_INCLUDE_DIR="$INSTALL/include" \
+  -DLIBSHARPYUV_LIBRARY="$SHARPYUV_LIB" \
+  -DLIBSHARPYUV_INCLUDE_DIR="$SHARPYUV_INCLUDE" \
   -DCMAKE_PREFIX_PATH="$INSTALL" \
   -DBUILD_SHARED_LIBS=OFF \
   -DCMAKE_INSTALL_PREFIX="$INSTALL" \
-  -DCMAKE_C_FLAGS="$ARCH_CFLAGS" \
+  -DCMAKE_C_FLAGS="$ARCH_CFLAGS -include $SHARPYUV_RENAME" \
   -DCMAKE_CXX_FLAGS="$ARCH_CXXFLAGS"
 cmake --build "$WORKDIR/libavif"
 cmake --install "$WORKDIR/libavif"
 verify_arch "$INSTALL/lib/libavif.a"
 
 echo "--------------------"
+echo "merging libsharpyuv into libavif.a"
+echo "--------------------"
+MERGE="$WORKDIR/sharpyuv-merge"
+rm -rf "$MERGE"
+mkdir -p "$MERGE"
+if [ "$OSX" -eq 1 ]; then
+  libtool -static -o "$MERGE/libavif.a" "$INSTALL/lib/libavif.a" "$SHARPYUV_LIB"
+else
+  (cd "$MERGE" && "$AR" x "$SHARPYUV_LIB")
+  CLASH=$("$AR" t "$INSTALL/lib/libavif.a" | grep -Fx -f <("$AR" t "$SHARPYUV_LIB") || true)
+  if [ -n "$CLASH" ]; then
+    echo "Error: libavif.a and libsharpyuv.a share member names: $CLASH" >&2
+    exit 1
+  fi
+  cp "$INSTALL/lib/libavif.a" "$MERGE/libavif.a"
+  "$AR" rs "$MERGE/libavif.a" $("$AR" t "$SHARPYUV_LIB" | sed "s|^|$MERGE/|")
+fi
+mv "$MERGE/libavif.a" "$INSTALL/lib/libavif.a"
+# Every libsharpyuv symbol in libavif.a must carry the avif_ prefix: none of
+# the original names may be defined or referenced, and the renamed entry point
+# must be defined.
+if [ "$OSX" -eq 1 ]; then
+  AVIF_SYMS=$("$NM" -g "$INSTALL/lib/libavif.a" | awk 'NF >= 2 {print $NF}' | sed 's/^_//' | sort -u)
+else
+  AVIF_SYMS=$("$NM" -g "$INSTALL/lib/libavif.a" | awk 'NF >= 2 {print $NF}' | sort -u)
+fi
+LEAKED=$(echo "$AVIF_SYMS" | grep -Fx -f "$SHARPYUV_SYMS" || true)
+if [ -n "$LEAKED" ]; then
+  echo "Error: libavif.a still has unprefixed libsharpyuv symbols:" >&2
+  echo "$LEAKED" >&2
+  exit 1
+fi
+if [ "$(defined_symbols "$INSTALL/lib/libavif.a" | grep -cx 'avif_SharpYuvConvert')" -ne 1 ]; then
+  echo "Error: libavif.a does not define avif_SharpYuvConvert" >&2
+  exit 1
+fi
+verify_arch "$INSTALL/lib/libavif.a"
+
+echo "--------------------"
 echo "packing keep-set"
 echo "--------------------"
-ARCHIVES="libturbojpeg.a libjpeg.a libavif.a libaom.a libdav1d.a libyuv.a libavformat.a libavcodec.a libswscale.a libavutil.a libz.a libbz2.a"
+ARCHIVES="libturbojpeg.a libjpeg.a libavif.a libaom.a libSvtAv1Enc.a libdav1d.a libyuv.a libavformat.a libavcodec.a libswscale.a libavutil.a libz.a libbz2.a"
 HEADER_DIRS="avif libavcodec libavformat libavutil libswscale"
 
 mkdir -p "$PREFIX/lib" "$PREFIX/include"
@@ -436,6 +594,7 @@ for archive in $ARCHIVES; do
   fi
   cp -L "$INSTALL/lib/$archive" "$PREFIX/lib/$archive"
   verify_arch "$PREFIX/lib/$archive"
+  verify_no_lto "$PREFIX/lib/$archive"
 done
 for dir in $HEADER_DIRS; do
   if [ ! -d "$INSTALL/include/$dir" ]; then
@@ -466,8 +625,8 @@ info = {
         "libjpeg-turbo": "3.1.0",
         "zlib-ng": "2.3.3",
         "bzip2": "1.0.8",
-        "dav1d": "1.5.1",
-        "libaom": "3.11.0",
+        "dav1d": "1.5.5",
+        "libaom": "3.15.3",
         "ffmpeg": "7.0.2",
         "ffmpeg_patches": [
             "0004-ffmpeg-mov-read-trun-ctts-shift.patch",
@@ -478,7 +637,9 @@ info = {
             "0009-ffmpeg-mov-zero-ctts-gap.patch",
         ],
         "libyuv": "4ed75166cf1885b9690214b362f8675294505a37",
-        "libavif": "1.1.1",
+        "svt-av1": "4.3.1",
+        "libsharpyuv": "libwebp 1.6.0, merged into libavif.a as avif_SharpYuv*",
+        "libavif": "1.4.2",
     },
     "archives": archives,
 }

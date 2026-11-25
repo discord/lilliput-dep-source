@@ -71,6 +71,19 @@ jobs:
         run: |
           ./scripts/build-lilliput-rs-deps.sh ${{ matrix.args }} --prefix="$RUNNER_TEMP/prefix"
 
+      - name: Smoke test the keep-set
+        run: |
+          prefix="$RUNNER_TEMP/prefix"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cxx="-lc++"
+          else
+            cxx="-lstdc++ -ldl"
+          fi
+          cc -O1 -I"$prefix/include" scripts/lilliput-rs-deps-smoke.c -o "$RUNNER_TEMP/smoke" \
+            "$prefix/lib/libavif.a" "$prefix/lib/libSvtAv1Enc.a" "$prefix/lib/libaom.a" \
+            "$prefix/lib/libdav1d.a" "$prefix/lib/libyuv.a" $cxx -lpthread -lm
+          "$RUNNER_TEMP/smoke"
+
       - name: Create archive
         run: |
           tar -C "$RUNNER_TEMP/prefix" -czf "$RUNNER_TEMP/${{ matrix.asset }}" .
